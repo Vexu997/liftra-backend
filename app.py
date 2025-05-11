@@ -5,8 +5,9 @@ import os
 
 app = Flask(__name__)
 
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 TOKEN_FILE = 'token.json'
+FOLDER_ID = '17gKONL0gLBx7Wvd4Cx3cBVEhHVdLQP2_'  # Folder zamówień
 
 def get_credentials():
     return Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
@@ -33,11 +34,9 @@ def save_data():
         sheets_service = build('sheets', 'v4', credentials=creds)
         drive_service = build('drive', 'v3', credentials=creds)
 
-        # Sprawdź, czy plik istnieje
         existing = find_sheet_by_name(drive_service, filename)
         if existing:
             file_id = existing['id']
-            # Nadpisujemy zawartość
             sheets_service.spreadsheets().values().update(
                 spreadsheetId=file_id,
                 range='A1',
@@ -46,12 +45,19 @@ def save_data():
             ).execute()
             return jsonify({'message': 'Zaktualizowano', 'id': file_id})
         else:
-            # Tworzymy nowy arkusz
             sheet = sheets_service.spreadsheets().create(
                 body={'properties': {'title': filename}},
                 fields='spreadsheetId'
             ).execute()
             file_id = sheet['spreadsheetId']
+
+            # Przenieś do folderu
+            drive_service.files().update(
+                fileId=file_id,
+                addParents=FOLDER_ID,
+                removeParents='root',
+                fields='id, parents'
+            ).execute()
 
             sheets_service.spreadsheets().values().update(
                 spreadsheetId=file_id,
@@ -90,7 +96,24 @@ def load_data():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/list', methods=['GET'])
+def list_sheets():
+    try:
+        creds = get_credentials()
+        drive_service = build('drive', 'v3', credentials=creds)
+
+        results = drive_service.files().list(
+            q=f"'{FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.spreadsheet'",
+            fields="files(name)"
+        ).execute()
+
+        files = results.get('files', [])
+        names = [f['name'] for f in files]
+
+        return jsonify(names)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/')
 def index():
     return 'LIFTRA API działa!'
-
